@@ -53,22 +53,35 @@ class M3U8Popup {
           </div>
           <span class="badge">${video.size || '未知大小'}</span>
         </div>
-        <div class="progress-container" id="progress-${index}">
+        <div class="progress-container">
           <div class="progress-bar">
             <div class="progress-fill" style="width: 0%"></div>
           </div>
           <div class="progress-text">准备下载...</div>
         </div>
         <div class="actions">
-          <button class="btn btn-primary" onclick="popup.download(${index})">
+          <button class="btn btn-primary" data-action="download" data-index="${index}">
             ⬇️ 下载MP4
           </button>
-          <button class="btn btn-secondary" onclick="popup.copyUrl(${index})">
+          <button class="btn btn-secondary" data-action="copy" data-index="${index}">
             📋 复制链接
           </button>
         </div>
       </div>
     `).join('');
+
+    // 使用事件委托绑定按钮点击
+    videoList.querySelectorAll('.btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const action = e.currentTarget.dataset.action;
+        const index = parseInt(e.currentTarget.dataset.index, 10);
+        if (action === 'download') {
+          this.download(index);
+        } else if (action === 'copy') {
+          this.copyUrl(index);
+        }
+      });
+    });
   }
 
   truncateUrl(url) {
@@ -88,12 +101,14 @@ class M3U8Popup {
     const video = this.videos[index];
     if (!video) {
       console.error('未找到视频:', index);
+      this.showToast('❌ 未找到视频');
       return;
     }
 
     const item = document.querySelector(`.video-item[data-index="${index}"]`);
     if (!item) {
       console.error('未找到视频项');
+      this.showToast('❌ UI错误');
       return;
     }
 
@@ -104,12 +119,14 @@ class M3U8Popup {
     
     if (!progressContainer || !progressFill || !progressText || !btn) {
       console.error('未找到UI元素');
+      this.showToast('❌ UI元素缺失');
       return;
     }
 
     progressContainer.style.display = 'block';
     btn.disabled = true;
     progressText.textContent = '正在下载...';
+    progressText.style.color = '#a0aec0';
     progressFill.style.width = '0%';
 
     try {
@@ -142,13 +159,30 @@ class M3U8Popup {
 
   async copyUrl(index) {
     const video = this.videos[index];
-    if (!video) return;
+    if (!video) {
+      this.showToast('❌ 未找到视频');
+      return;
+    }
 
     try {
       await navigator.clipboard.writeText(video.url);
-      this.showToast('链接已复制到剪贴板');
+      this.showToast('✅ 链接已复制到剪贴板');
     } catch (error) {
       console.error('复制失败:', error);
+      // 备用方案：创建临时输入框
+      const textarea = document.createElement('textarea');
+      textarea.value = video.url;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand('copy');
+        this.showToast('✅ 链接已复制到剪贴板');
+      } catch (e) {
+        this.showToast('❌ 复制失败');
+      }
+      document.body.removeChild(textarea);
     }
   }
 
