@@ -30,13 +30,22 @@ class M3U8Background {
   }
 
   isM3U8Url(url) {
+    // 排除图片资源
+    const imagePatterns = [
+      /\.(jpg|jpeg|png|gif|webp|svg|ico|bmp)(\?|$)/i,
+      /\/image\//i,
+      /\/img\//i,
+      /\/images\//i,
+      /\/assets\/.*\.(jpg|jpeg|png|gif|webp)/i
+    ];
+    if (imagePatterns.some(p => p.test(url))) {
+      return false;
+    }
+
+    // M3U8匹配模式
     const m3u8Patterns = [
-      /\.m3u8/i,
-      /\.m3u8\?/i,
-      /m3u8/i,
-      /playlist.*\.ts/i,
-      /hls.*\.ts/i,
-      /stream.*\.m3u8/i
+      /\.m3u8(\?|$)/i,
+      /m3u8/i
     ];
     
     return m3u8Patterns.some(pattern => pattern.test(url));
@@ -86,37 +95,71 @@ class M3U8Background {
   }
 
   async handleDownload(m3u8Url, filename) {
+    console.log('[M3U8下载器] 开始处理下载:', m3u8Url);
+    
     try {
       // 获取M3U8内容
-      const m3u8Content = await this.fetchM3U8(m3u8Url);
+      let m3u8Content;
+      try {
+        const response = await fetch(m3u8Url, {
+          mode: 'cors',
+          credentials: 'omit'
+        });
+        if (!response.ok) {
+          throw new Error(`获取M3U8失败: HTTP ${response.status}`);
+        }
+        m3u8Content = await response.text();
+      } catch (fetchError) {
+        // 如果跨域失败，尝试使用no-cors模式
+        console.warn('[M3U8下载器] 跨域获取失败，尝试替代方案:', fetchError.message);
+        throw new Error('无法访问M3U8资源，可能是跨域限制。请尝试复制链接使用其他下载工具。');
+      }
+
+      console.log('[M3U8下载器] M3U8内容长度:', m3u8Content.length);
       
       // 解析TS片段
       const tsUrls = this.parseM3U8(m3u8Url, m3u8Content);
+      console.log('[M3U8下载器] 解析到TS片段数:', tsUrls.length);
       
       if (tsUrls.length === 0) {
-        throw new Error('未找到有效的视频片段');
+        // 检查是否是主播放列表（包含多个子播放列表）
+        const subPlaylists = this.parseMasterPlaylist(m3u8Url, m3u8Content);
+        if (subPlaylists.length > 0) {
+          // 选择第一个子播放列表
+          const firstPlaylist = subPlaylists[0];
+          console.log('[M3U8下载器] 检测到主播放列表，选择:', firstPlaylist);
+          return await this.handleDownload(firstPlaylist, filename);
+        }
+        
+        throw new Error('未找到有效的视频片段。该M3U8可能是加密或特殊格式。');
       }
 
       // 下载所有TS片段
+      console.log('[M3U8下载器] 开始下载TS片段...');
       const tsBlobs = await this.downloadTSSegments(tsUrls);
+      
+      if (tsBlobs.length === 0) {
+        throw new Error('所有片段下载失败');
+      }
       
       // 合并为单个Blob
       const combinedBlob = new Blob(tsBlobs, { type: 'video/mp2t' });
+      console.log('[M3U8下载器] 合并完成，大小:', combinedBlob.size, 'bytes');
       
-      // 转换为MP4（简单合并，实际需要FFmpeg）
-      // 这里直接下载TS文件，用户可用播放器播放或后续转换
+      // 创建下载URL
       const url = URL.createObjectURL(combinedBlob);
       
       // 使用Chrome下载API
-      await chrome.downloads.download({
+      const downloadId = await chrome.downloads.download({
         url: url,
         filename: filename.replace('.mp4', '.ts'),
         saveAs: true
       });
 
+      console.log('[M3U8下载器] 下载任务ID:', downloadId);
       return { success: true };
     } catch (error) {
-      console.error('下载失败:', error);
+      console.error('[M3U8下载器] 下载失败:', error);
       return { success: false, error: error.message };
     }
   }
@@ -146,14 +189,26 @@ class M3U8Background {
         const tsUrl = this.resolveUrl(baseUrl, trimmed);
         tsUrls.push(tsUrl);
       }
-      
-      // 如果是嵌套的M3U8，递归处理
-      if (trimmed.endsWith('.m3u8') && !trimmed.startsWith('http')) {
-        // 这里可以递归处理，但为简化先跳过
-      }
     }
     
     return tsUrls;
+  }
+
+  parseMasterPlaylist(baseUrl, content) {
+    const playlists = [];
+    const lines = content.split('\n');
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      // 查找子播放列表（.m3u8文件）
+      if (!line.startsWith('#') && line !== '' && (line.endsWith('.m3u8') || line.includes('.m3u8?'))) {
+        const playlistUrl = this.resolveUrl(baseUrl, line);
+        playlists.push(playlistUrl);
+      }
+    }
+    
+    return playlists;
   }
 
   resolveUrl(baseUrl, relativePath) {
@@ -167,20 +222,22 @@ class M3U8Background {
   async downloadTSSegments(urls) {
     const blobs = [];
     let completed = 0;
+    let failed = 0;
     
     // 并发下载，但限制并发数
-    const concurrency = 5;
+    const concurrency = 3;
     const chunks = this.chunkArray(urls, concurrency);
     
     for (const chunk of chunks) {
       const promises = chunk.map(url => 
-        fetch(url)
+        fetch(url, { mode: 'cors', credentials: 'omit' })
           .then(res => {
-            if (!res.ok) throw new Error(`下载失败: ${res.status}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return res.blob();
           })
           .catch(err => {
-            console.error(`片段下载失败: ${url}`, err);
+            console.warn('[M3U8下载器] 片段下载失败:', url, err.message);
+            failed++;
             return null;
           })
       );
@@ -193,7 +250,11 @@ class M3U8Background {
       }
       
       completed += chunk.length;
-      console.log(`下载进度: ${completed}/${urls.length}`);
+      console.log(`[M3U8下载器] 下载进度: ${completed}/${urls.length}, 成功: ${blobs.length}, 失败: ${failed}`);
+    }
+    
+    if (failed > 0 && blobs.length === 0) {
+      console.warn('[M3U8下载器] 所有片段下载失败，可能是跨域限制');
     }
     
     return blobs;

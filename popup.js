@@ -86,17 +86,35 @@ class M3U8Popup {
 
   async download(index) {
     const video = this.videos[index];
-    if (!video) return;
+    if (!video) {
+      console.error('未找到视频:', index);
+      return;
+    }
 
-    const progressContainer = document.getElementById(`progress-${index}`);
+    const item = document.querySelector(`.video-item[data-index="${index}"]`);
+    if (!item) {
+      console.error('未找到视频项');
+      return;
+    }
+
+    const progressContainer = item.querySelector('.progress-container');
     const progressFill = progressContainer.querySelector('.progress-fill');
     const progressText = progressContainer.querySelector('.progress-text');
-    const btn = progressContainer.parentElement.querySelector('.btn-primary');
+    const btn = item.querySelector('.btn-primary');
     
+    if (!progressContainer || !progressFill || !progressText || !btn) {
+      console.error('未找到UI元素');
+      return;
+    }
+
     progressContainer.style.display = 'block';
     btn.disabled = true;
+    progressText.textContent = '正在下载...';
+    progressFill.style.width = '0%';
 
     try {
+      console.log('开始下载:', video.url);
+      
       // 发送下载请求到background
       const response = await chrome.runtime.sendMessage({
         action: 'download',
@@ -104,14 +122,18 @@ class M3U8Popup {
         filename: `video_${Date.now()}.mp4`
       });
 
-      if (response.success) {
+      console.log('下载响应:', response);
+
+      if (response && response.success) {
         progressFill.style.width = '100%';
         progressText.textContent = '✅ 下载完成!';
         progressText.style.color = '#4ade80';
       } else {
-        throw new Error(response.error || '下载失败');
+        const errorMsg = (response && response.error) ? response.error : '下载失败';
+        throw new Error(errorMsg);
       }
     } catch (error) {
+      console.error('下载错误:', error);
       progressText.textContent = `❌ ${error.message}`;
       progressText.style.color = '#f87171';
       btn.disabled = false;

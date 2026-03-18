@@ -36,14 +36,25 @@
 
   // 检查是否是M3U8 URL
   function isM3U8Url(url) {
-    const patterns = [
-      /\.m3u8/i,
-      /m3u8/i,
-      /playlist/i,
-      /hls/i,
-      /\.ts(\?|$)/i
+    // 排除图片资源
+    const imagePatterns = [
+      /\.(jpg|jpeg|png|gif|webp|svg|ico|bmp)(\?|$)/i,
+      /\/image\//i,
+      /\/img\//i,
+      /\/images\//i,
+      /\/assets\/.*\.(jpg|jpeg|png|gif|webp)/i
     ];
-    return patterns.some(p => p.test(url));
+    if (imagePatterns.some(p => p.test(url))) {
+      return false;
+    }
+
+    // M3U8匹配模式
+    const m3u8Patterns = [
+      /\.m3u8(\?|$)/i,
+      /m3u8/i
+    ];
+    
+    return m3u8Patterns.some(p => p.test(url));
   }
 
   // 报告发现的M3U8资源
