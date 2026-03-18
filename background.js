@@ -110,28 +110,38 @@ class M3U8Background {
         }
         m3u8Content = await response.text();
       } catch (fetchError) {
-        // 如果跨域失败，尝试使用no-cors模式
-        console.warn('[M3U8下载器] 跨域获取失败，尝试替代方案:', fetchError.message);
-        throw new Error('无法访问M3U8资源，可能是跨域限制。请尝试复制链接使用其他下载工具。');
+        console.warn('[M3U8下载器] 跨域获取失败:', fetchError.message);
+        throw new Error('无法访问M3U8资源（跨域限制）。请复制链接使用专业下载工具如 ffmpeg 或 N_m3u8DL-RE。');
       }
 
-      console.log('[M3U8下载器] M3U8内容长度:', m3u8Content.length);
+      console.log('[M3U8下载器] M3U8内容预览:', m3u8Content.substring(0, 500));
       
       // 解析TS片段
-      const tsUrls = this.parseM3U8(m3u8Url, m3u8Content);
+      let tsUrls = this.parseM3U8(m3u8Url, m3u8Content);
       console.log('[M3U8下载器] 解析到TS片段数:', tsUrls.length);
       
+      // 如果没有找到TS片段，检查是否是主播放列表
       if (tsUrls.length === 0) {
-        // 检查是否是主播放列表（包含多个子播放列表）
         const subPlaylists = this.parseMasterPlaylist(m3u8Url, m3u8Content);
         if (subPlaylists.length > 0) {
-          // 选择第一个子播放列表
           const firstPlaylist = subPlaylists[0];
-          console.log('[M3U8下载器] 检测到主播放列表，选择:', firstPlaylist);
+          console.log('[M3U8下载器] 检测到主播放列表，自动选择:', firstPlaylist);
+          // 递归处理子播放列表
           return await this.handleDownload(firstPlaylist, filename);
         }
         
-        throw new Error('未找到有效的视频片段。该M3U8可能是加密或特殊格式。');
+        // 提供更详细的错误信息
+        const hasEncryption = m3u8Content.includes('#EXT-X-KEY:');
+        if (hasEncryption) {
+          throw new Error('视频已加密，无法直接下载。请复制链接使用 ffmpeg 或 N_m3u8DL-RE 下载。');
+        }
+        throw new Error('未识别的M3U8格式。可能是动态加载或特殊加密，建议使用专业下载工具。');
+      }
+
+      // 检查加密
+      const isEncrypted = m3u8Content.includes('#EXT-X-KEY:');
+      if (isEncrypted) {
+        throw new Error('视频已加密，浏览器扩展无法解密。请复制链接使用 ffmpeg 或 N_m3u8DL-RE 配合密钥下载。');
       }
 
       // 下载所有TS片段
@@ -139,12 +149,12 @@ class M3U8Background {
       const tsBlobs = await this.downloadTSSegments(tsUrls);
       
       if (tsBlobs.length === 0) {
-        throw new Error('所有片段下载失败');
+        throw new Error('所有片段下载失败，可能是跨域限制或网络问题。');
       }
       
       // 合并为单个Blob
       const combinedBlob = new Blob(tsBlobs, { type: 'video/mp2t' });
-      console.log('[M3U8下载器] 合并完成，大小:', combinedBlob.size, 'bytes');
+      console.log('[M3U8下载器] 合并完成，大小:', (combinedBlob.size / 1024 / 1024).toFixed(2), 'MB');
       
       // 创建下载URL
       const url = URL.createObjectURL(combinedBlob);
@@ -176,6 +186,12 @@ class M3U8Background {
     const tsUrls = [];
     const lines = content.split('\n');
     
+    // 检查是否是加密的M3U8
+    const isEncrypted = content.includes('#EXT-X-KEY:');
+    if (isEncrypted) {
+      console.warn('[M3U8下载器] 检测到加密的M3U8，可能无法直接下载');
+    }
+    
     for (const line of lines) {
       const trimmed = line.trim();
       
@@ -184,10 +200,20 @@ class M3U8Background {
         continue;
       }
       
-      // 处理TS文件路径
-      if (trimmed.endsWith('.ts') || trimmed.includes('.ts?')) {
+      // 处理TS文件路径（支持多种格式）
+      if (trimmed.endsWith('.ts') || 
+          trimmed.includes('.ts?') || 
+          trimmed.includes('.ts&') ||
+          /^[a-f0-9]{32,}$/i.test(trimmed) || // 可能是加密的片段名
+          trimmed.includes('segment') ||
+          trimmed.includes('chunk') ||
+          trimmed.includes('part')) {
+        
         const tsUrl = this.resolveUrl(baseUrl, trimmed);
-        tsUrls.push(tsUrl);
+        // 确保URL有效
+        if (tsUrl.startsWith('http') || tsUrl.startsWith('//') || tsUrl.startsWith('/')) {
+          tsUrls.push(tsUrl);
+        }
       }
     }
     
@@ -197,18 +223,46 @@ class M3U8Background {
   parseMasterPlaylist(baseUrl, content) {
     const playlists = [];
     const lines = content.split('\n');
+    let currentBandwidth = 0;
+    let bestPlaylist = null;
+    let bestBandwidth = 0;
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
       
+      // 解析带宽信息
+      if (line.startsWith('#EXT-X-STREAM-INF:')) {
+        const bandwidthMatch = line.match(/BANDWIDTH=(\d+)/);
+        if (bandwidthMatch) {
+          currentBandwidth = parseInt(bandwidthMatch[1], 10);
+        }
+      }
+      
       // 查找子播放列表（.m3u8文件）
-      if (!line.startsWith('#') && line !== '' && (line.endsWith('.m3u8') || line.includes('.m3u8?'))) {
-        const playlistUrl = this.resolveUrl(baseUrl, line);
-        playlists.push(playlistUrl);
+      if (!line.startsWith('#') && line !== '') {
+        const isM3U8 = line.endsWith('.m3u8') || line.includes('.m3u8?');
+        const mightBePlaylist = !line.includes('.ts') && !line.includes('.mp4');
+        
+        if (isM3U8 || mightBePlaylist) {
+          const playlistUrl = this.resolveUrl(baseUrl, line);
+          playlists.push({ url: playlistUrl, bandwidth: currentBandwidth });
+          
+          // 记录最高清晰度
+          if (currentBandwidth > bestBandwidth) {
+            bestBandwidth = currentBandwidth;
+            bestPlaylist = playlistUrl;
+          }
+        }
+        currentBandwidth = 0;
       }
     }
     
-    return playlists;
+    // 优先返回最高清晰度
+    if (bestPlaylist) {
+      return [bestPlaylist];
+    }
+    
+    return playlists.map(p => p.url);
   }
 
   resolveUrl(baseUrl, relativePath) {
