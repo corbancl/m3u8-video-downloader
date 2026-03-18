@@ -1,0 +1,13 @@
+{
+  "name": "m3u8-video-downloader",
+  "version": "1.0.0",
+  "description": "M3U8视频下载器 - Chrome扩展",
+  "scripts": {
+    "build": "echo 'Build complete'"
+  },
+  "author": "corbancl",
+  "license": "MIT",
+  "devDependencies": {
+    "sharp": "^0.34.5"
+  }
+}

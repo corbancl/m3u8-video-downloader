@@ -1,0 +1,47 @@
+// M3U8视频下载器 - 图标生成脚本
+
+const fs = require('fs');
+const path = require('path');
+
+// 简单的SVG图标（可转换为PNG）
+const svgIcon = `<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea"/>
+      <stop offset="100%" style="stop-color:#764ba2"/>
+    </linearGradient>
+    <linearGradient id="arrow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#fff"/>
+      <stop offset="100%" style="stop-color:#e2e8f0"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- 背景圆形 -->
+  <circle cx="64" cy="64" r="60" fill="url(#bg)"/>
+  
+  <!-- 下载箭头 -->
+  <path d="M64 25 L64 75 M40 55 L64 75 L88 55" 
+        stroke="url(#arrow)" stroke-width="8" stroke-linecap="round" 
+        stroke-linejoin="round" fill="none"/>
+        
+  <!-- 底部横线 -->
+  <rect x="35" y="80" width="58" height="8" rx="4" fill="url(#arrow)"/>
+  
+  <!-- 视频符号 -->
+  <rect x="30" y="35" width="25" height="18" rx="3" fill="url(#arrow)" opacity="0.8"/>
+  <polygon points="60,40 60,53 72,44" fill="url(#arrow)"/>
+</svg>`;
+
+// 创建icons目录
+const iconsDir = path.join(__dirname, 'icons');
+if (!fs.existsSync(iconsDir)) {
+  fs.mkdirSync(iconsDir, { recursive: true });
+}
+
+// 保存SVG文件
+fs.writeFileSync(path.join(iconsDir, 'icon.svg'), svgIcon);
+
+console.log('SVG图标已生成！');
+console.log('请使用在线工具将SVG转换为PNG: https://svgtopng.com/');
+console.log('需要尺寸: 16x16, 32x32, 48x48, 128x128');
